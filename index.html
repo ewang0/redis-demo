@@ -40,6 +40,16 @@
         button:hover {
             background-color: #45a049;
         }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .warning-message {
+            color: #ff3333;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -47,12 +57,14 @@
         <h1>Click Counter</h1>
         <div class="counter" id="counter">0</div>
         <button id="clickButton">Click Me!</button>
+        <div id="warningMessage" class="warning-message">You're clicking too fast! Please wait a moment.</div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const counterElement = document.getElementById('counter');
             const clickButton = document.getElementById('clickButton');
+            const warningMessage = document.getElementById('warningMessage');
             
             // Update the counter display with value from server
             async function updateCounterDisplay() {
@@ -85,6 +97,34 @@
                         // Get the updated count from the response
                         const data = await response.json();
                         counterElement.textContent = data.count || 0;
+                        
+                        // Hide warning message if it was previously shown
+                        warningMessage.style.display = 'none';
+                    } else if (response.status === 429) {
+                        // Rate limited - 429 Too Many Requests
+                        const data = await response.json();
+                        
+                        // Disable the button
+                        clickButton.disabled = true;
+                        
+                        // Show warning message
+                        warningMessage.textContent = data.message || 'You\'re clicking too fast! Please retry after: ' + data.retryAfter + ' seconds.';
+                        warningMessage.style.display = 'block';
+                        
+                        // Enable the button after the rate limit expires
+                        if (data.retryAfter) {
+                            const retryAfterMs = data.retryAfter * 1000;
+                            setTimeout(() => {
+                                clickButton.disabled = false;
+                                warningMessage.style.display = 'none';
+                            }, retryAfterMs);
+                        } else {
+                            // Default timeout if retryAfter is not provided
+                            setTimeout(() => {
+                                clickButton.disabled = false;
+                                warningMessage.style.display = 'none';
+                            }, 5000);
+                        }
                     } else {
                         console.error('Failed to send click to server');
                     }

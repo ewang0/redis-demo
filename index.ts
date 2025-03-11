@@ -1,55 +1,19 @@
-import express, { type Request, type Response, type NextFunction } from "express";
+import express from "express";
 import Redis from "ioredis";
 import path from 'path';
+import cors from 'cors';
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 const redis = new Redis();
 
 // Global click counter
 const CLICK_COUNTER_KEY = "global:clickCount"
 
-// Rate limiting middleware
-const rateLimiter = async (req: any, res: any, next: any) => {
-  const ip = req.ip
-  const key = `ratelimit:${ip}`
-
-  try {
-    // Increment the counter for this IP
-    const count = await redis.incr(key)
-
-    // set the expiration time to 60 seconds
-    if(count === 1) {
-      await redis.expire(key, 60)
-    }
-
-    // if the count is greater than 10, return a 429 error
-    const ttl = await redis.ttl(key)
-
-    res.setHeader('X-RateLimit-Limit', 10)
-    res.setHeader('X-RateLimit-Remaining', Math.max(0, 10 - count))
-    res.setHeader('X-RateLimit-Reset', ttl)
-
-    if(count > 10) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        message: 'Too many requests, please try again later.'
-      })
-    }
-    
-    next();
-  } catch (err) {
-    console.error('Rate limiting error:', err)
-    next()
-  }
-}
-
 // Move these lines outside the rateLimiter function
 app.use(express.static(path.join(__dirname)))
-
-// Register the middleware correctly
-app.use('/api/', rateLimiter)
 
 // API endpoint to get the current count
 app.get('/api/count', async (req, res) => {
@@ -66,40 +30,50 @@ app.get('/api/count', async (req, res) => {
 app.post('/api/click', async (req: any, res: any) => {
   try {
     const ip = req.ip
-    const userClickKey = `user:${ip}:clicks`
+    const userClicksKey = `user:${ip}:clicks`
+    const now = Date.now()
+    const windowSize = 10000 // 10 seconds in milliseconds
     
-    // Check if user has exceeded click limit
-    const userClicks = await redis.incr(userClickKey)
+    // Add current timestamp to the list
+    await redis.lpush(userClicksKey, now)
     
-    // Set expiration on first click
-    if (userClicks === 1) {
-      await redis.expire(userClickKey, 10) // 10 seconds window
+    // Set expiration on the key to clean up automatically (a bit longer than window)
+    await redis.expire(userClicksKey, 15) // 15 seconds
+    
+    // Get all timestamps in the list
+    const timestamps = await redis.lrange(userClicksKey, 0, -1)
+    
+    // Filter out timestamps older than our window
+    const validTimestamps = timestamps.filter(ts => {
+      return now - parseInt(ts) < windowSize
+    })
+    
+    // Remove old timestamps (optimization)
+    if (validTimestamps.length < timestamps.length) {
+      await redis.ltrim(userClicksKey, 0, validTimestamps.length - 1)
     }
     
-    // If user has clicked more than 10 times in 10 seconds
-    if (userClicks > 10) {
-      const ttl = await redis.ttl(userClickKey)
-      const response = res.status(429).json({ 
+    // Check if user has exceeded rate limit
+    if (validTimestamps.length > 10) {
+      // Calculate time until oldest request expires
+      const oldestValidTimestamp = Math.min(...validTimestamps.map(ts => parseInt(ts)))
+      const retryAfter = Math.ceil((oldestValidTimestamp + windowSize - now) / 1000)
+      
+      return res.status(429).json({ 
         error: 'Click limit exceeded', 
-        message: 'Maximum 10 clicks per 10 seconds allowed',
-        resetIn: ttl
-      }) 
-      return response
+        message: 'Maximum 10 clicks per 10 seconds allowed. Retry after: ' + retryAfter + ' seconds.',
+        retryAfter: retryAfter,
+        currentClicks: validTimestamps.length
+      })
     }
     
-    const { count } = req.body;
-    let newCount;
-
-    if (typeof count === 'number') {
-      newCount = await redis.set(CLICK_COUNTER_KEY, count, 'GET')
-    } else {
-      newCount = await redis.incr(CLICK_COUNTER_KEY)
-    }
-
+    // Process the click
+    const newCount = await redis.incr(CLICK_COUNTER_KEY)
+    
     res.json({ 
-      count: parseInt(newCount as string) || 0,
-      userClicks,
-      clicksRemaining: Math.max(0, 10 - userClicks)
+      count: newCount,
+      userClicks: validTimestamps.length,
+      clicksRemaining: Math.max(0, 10 - validTimestamps.length)
     })
   } catch (err) {
     console.error('Error updating count:', err)
@@ -112,7 +86,10 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Add server startup code
-app.listen(3012, () => {
-  console.log("Server is running on port 3012")
+const PORT = process.env.PORT || 3012;
+
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`)
 })
+
+export { app }
