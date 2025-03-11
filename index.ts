@@ -11,7 +11,7 @@ const redis = new Redis();
 const CLICK_COUNTER_KEY = "global:clickCount"
 
 // Rate limiting middleware
-const rateLimiter = async (req: Request, res: Response, next: NextFunction) => {
+const rateLimiter = async (req: any, res: any, next: any) => {
   const ip = req.ip
   const key = `ratelimit:${ip}`
 
@@ -63,8 +63,30 @@ app.get('/api/count', async (req, res) => {
 })
 
 // API endpoint to update the count
-app.post('/api/click', async (req, res) => {
+app.post('/api/click', async (req: any, res: any) => {
   try {
+    const ip = req.ip
+    const userClickKey = `user:${ip}:clicks`
+    
+    // Check if user has exceeded click limit
+    const userClicks = await redis.incr(userClickKey)
+    
+    // Set expiration on first click
+    if (userClicks === 1) {
+      await redis.expire(userClickKey, 10) // 10 seconds window
+    }
+    
+    // If user has clicked more than 10 times in 10 seconds
+    if (userClicks > 10) {
+      const ttl = await redis.ttl(userClickKey)
+      const response = res.status(429).json({ 
+        error: 'Click limit exceeded', 
+        message: 'Maximum 10 clicks per 10 seconds allowed',
+        resetIn: ttl
+      }) 
+      return response
+    }
+    
     const { count } = req.body;
     let newCount;
 
@@ -74,7 +96,11 @@ app.post('/api/click', async (req, res) => {
       newCount = await redis.incr(CLICK_COUNTER_KEY)
     }
 
-    res.json({ count: parseInt(newCount as string) || 0 })
+    res.json({ 
+      count: parseInt(newCount as string) || 0,
+      userClicks,
+      clicksRemaining: Math.max(0, 10 - userClicks)
+    })
   } catch (err) {
     console.error('Error updating count:', err)
     res.status(500).json({ error: 'Failed to update count'})
