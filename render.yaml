@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: redis-click-counter
+    runtime: bun
+    buildCommand: bun install
+    startCommand: bun run index.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: click-counter-redis
+          property: connectionString
+
+  - type: redis
+    name: click-counter-redis
+    ipAllowList: []
+    plan: free
