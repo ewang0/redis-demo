@@ -53,29 +53,39 @@
         document.addEventListener('DOMContentLoaded', () => {
             const counterElement = document.getElementById('counter');
             const clickButton = document.getElementById('clickButton');
-            let count = 0;
-
-            // Update the counter display
-            function updateCounter() {
-                counterElement.textContent = count;
+            
+            // Update the counter display with value from server
+            async function updateCounterDisplay() {
+                try {
+                    const response = await fetch('/api/count');
+                    if (response.ok) {
+                        const data = await response.json();
+                        counterElement.textContent = data.count || 0;
+                    } else {
+                        console.error('Failed to fetch count from server');
+                    }
+                } catch (error) {
+                    console.error('Error fetching count:', error);
+                }
             }
 
             // Handle button click
             clickButton.addEventListener('click', async () => {
-                count++;
-                updateCounter();
-                
                 try {
-                    // Send the click event to the server
+                    // Increment the counter on the server
                     const response = await fetch('/api/click', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({ count })
+                        body: JSON.stringify({})
                     });
                     
-                    if (!response.ok) {
+                    if (response.ok) {
+                        // Get the updated count from the response
+                        const data = await response.json();
+                        counterElement.textContent = data.count || 0;
+                    } else {
                         console.error('Failed to send click to server');
                     }
                 } catch (error) {
@@ -83,22 +93,8 @@
                 }
             });
 
-            // Optional: Get initial count from server
-            async function getInitialCount() {
-                try {
-                    const response = await fetch('/api/count');
-                    if (response.ok) {
-                        const data = await response.json();
-                        count = data.count || 0;
-                        updateCounter();
-                    }
-                } catch (error) {
-                    console.error('Error fetching initial count:', error);
-                }
-            }
-
-            // Uncomment to fetch initial count from server
-            // getInitialCount();
+            // Get initial count from server
+            updateCounterDisplay();
         });
     </script>
 </body>
